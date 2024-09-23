@@ -40,24 +40,43 @@ class TenantManager {
         .find({})
         .toArray()
         .then((rawTenants) => {
+          console.log("Raw tenants fetched from the database:", rawTenants);
+
           const tenants = rawTenants.map((rt) => {
             const tenant = Object.assign(new Tenant(), rt);
+            console.log("Transformed tenant object:", tenant);
+
             tenant.applications = tenant.applications.map((app) => {
               let application;
               if (app.id === APP_IDS.KEYCLOAK) {
                 application = Object.assign(new KeycloakApplication(), app);
               } else {
-                return SecurityUtils.decryptObject(app, TENANT_ENCRYPT_KEYS);
+                if (app) {
+                  return SecurityUtils.decryptObject(app, TENANT_ENCRYPT_KEYS);
+                } else {
+                  console.warn("Application is undefined:", app);
+                  return app; // or handle undefined app as needed
+                }
               }
-              application.decryptSecret();
+              if (application) {
+                application.decryptSecret();
+              }
               return application;
             });
-            return SecurityUtils.decryptObject(tenant, TENANT_ENCRYPT_KEYS);
-          });
 
+            if (tenant) {
+              return SecurityUtils.decryptObject(tenant, TENANT_ENCRYPT_KEYS);
+            } else {
+              console.warn("Tenant is undefined:", tenant);
+              return tenant; // or handle undefined tenant as needed
+            }
+          });
+          console.log("Final tenants array:", tenants);
           resolve(tenants);
         })
-        .catch((err) => reject(err));
+        .catch((error) => {
+          console.error("Error fetching tenants from the database:", error);
+        });
     });
   }
 
