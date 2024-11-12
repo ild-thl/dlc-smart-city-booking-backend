@@ -82,7 +82,7 @@ class MailerService {
                 pool: true,
                 host: tenant.noreplyHost,
                 port: tenant.noreplyPort,
-                secure: true, // use TLS
+                secure: false, // use STARTTLS
                 auth: {
                   user: tenant.noreplyUser,
                   pass: tenant.noreplyPassword,
