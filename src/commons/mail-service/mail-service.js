@@ -78,15 +78,20 @@ class MailerService {
                 `${tenantId} -- sending mail to ${address} with subject ${subject}`,
               );
 
+              secure = tenant.noreplyPor == 587 ? false : true; // use STARTTLS for port 587, otherwise use SSL
+
               const config = {
                 pool: true,
                 host: tenant.noreplyHost,
                 port: tenant.noreplyPort,
-                secure: false, // use STARTTLS
+                secure: secure,
                 auth: {
                   user: tenant.noreplyUser,
                   pass: tenant.noreplyPassword,
                 },
+                tls: {
+                  minVersion: 'TLSv1.2' // Specify the minimum TLS version
+                }
               };
 
               const logConfig = {
