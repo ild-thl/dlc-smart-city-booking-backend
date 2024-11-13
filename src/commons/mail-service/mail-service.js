@@ -90,6 +90,7 @@ class MailerService {
                   pass: tenant.noreplyPassword,
                 },
                 tls: {
+                  rejectUnauthorized: false, // Disable strict hostname verification for internal connections
                   minVersion: 'TLSv1.2' // Specify the minimum TLS version
                 }
               };
