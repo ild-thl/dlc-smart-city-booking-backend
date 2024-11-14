@@ -108,8 +108,8 @@ class ItemCheckoutService {
       );
     } else {
       concurrentBookings = await BookingManager.getRelatedBookings(
-        bookable.id,
         bookable.tenant,
+        bookable.id,
       );
     }
 
