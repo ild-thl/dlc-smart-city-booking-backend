@@ -3,31 +3,43 @@ const AuthenticationController = require("../authentication/controllers/authenti
 const BookableController = require("./controllers/bookable-controller");
 const EventController = require("./controllers/event-controller");
 const PaymentController = require("./controllers/payment-controller");
-const UserController = require("./controllers/user-controller");
 const CalendarController = require("./controllers/calendar-controller");
 const CouponController = require("./controllers/coupon-controller");
 const { BookingController } = require("./controllers/booking-controller");
 const CheckoutController = require("./controllers/checkout-controller");
 const FileController = require("./controllers/file-controller");
+const WorkflowController = require("./controllers/workflow-controller");
+const RoleController = require("./controllers/role-controller");
 
-var router = express.Router({ mergeParams: true });
+const router = express.Router({ mergeParams: true });
 
 // BOOKABLES
 // =========
 
 //Public
-router.get("/bookables", BookableController.getBookables);
-router.get("/bookables/:id", BookableController.getBookable);
+router.get("/bookables/public", BookableController.getPublicBookables);
+router.get("/bookables/public/:id", BookableController.getPublicBookable);
 router.get("/bookables/:id/bookings", BookingController.getRelatedBookings);
 router.get("/bookables/:id/openingHours", BookableController.getOpeningHours);
 router.get(
   "/bookables/:id/availability",
-  CalendarController.getBookableAvailability,
+  CalendarController.getBookableAvailabilityFixed,
 );
 router.get("/bookables/:id/occupancy", BookableController.getBookableOccupancy);
 
 
 // Protected
+router.get(
+  "/bookables",
+  AuthenticationController.isSignedIn,
+  BookableController.getBookables,
+);
+router.get(
+  "/bookables/:id",
+  AuthenticationController.isSignedIn,
+  BookableController.getBookable,
+);
+
 router.put(
   "/bookables",
   AuthenticationController.isSignedIn,
@@ -80,41 +92,6 @@ router.get(
   EventController.countCheck,
 );
 
-// USERS
-// =====
-
-// Protected
-router.get(
-  "/users",
-  AuthenticationController.isSignedIn,
-  UserController.getUsers,
-);
-router.get(
-  "/users/ids",
-  AuthenticationController.isSignedIn,
-  UserController.getUserIds,
-);
-router.get(
-  "/users/:id",
-  AuthenticationController.isSignedIn,
-  UserController.getUser,
-);
-router.put(
-  "/users",
-  AuthenticationController.isSignedIn,
-  UserController.storeUser,
-);
-router.put(
-  "/user",
-  AuthenticationController.isSignedIn,
-  UserController.updateMe,
-);
-router.delete(
-  "/users/:id",
-  AuthenticationController.isSignedIn,
-  UserController.removeUser,
-);
-
 // BOOKINGS
 // ========
 
@@ -122,6 +99,10 @@ router.delete(
 router.get("/bookings", BookingController.getBookings);
 
 router.get("/bookings/:id/status", BookingController.getBookingStatus);
+router.get(
+  "/bookings/:id/status/public",
+  BookingController.getPublicBookingStatus,
+);
 
 // Protected
 router.get(
@@ -150,6 +131,23 @@ router.get(
   BookingController.commitBooking,
 );
 router.post(
+  "/bookings/:id/reject",
+  AuthenticationController.isSignedIn,
+  BookingController.rejectBooking,
+);
+router.post(
+  "/bookings/:id/request-reject",
+  BookingController.requestRejectBooking,
+);
+router.get(
+  "/bookings/:id/verify-ownership",
+  BookingController.verifyBookingOwnership,
+);
+router.get(
+  "/bookings/:id/hooks/:hookId/release",
+  BookingController.releaseBookingHook,
+);
+router.post(
   "/bookings/:id/receipt",
   AuthenticationController.isSignedIn,
   BookingController.createReceipt,
@@ -165,14 +163,17 @@ router.get(
 // ========
 router.post("/checkout", CheckoutController.checkout);
 router.post("/checkout/validateItem", CheckoutController.validateItem);
+router.get("/checkout/permissions/:id", CheckoutController.checkoutPermissions);
 
 // PAYMENTS
 // ========
 
 // Public
-router.post("/payments", PaymentController.getPaymentUrl);
-router.get("/payments/notify", PaymentController.paymentNotification);
+router.post("/payments", PaymentController.createPayment);
+router.get("/payments/notify", PaymentController.paymentNotificationGET);
+router.post("/payments/notify", PaymentController.paymentNotificationPOST);
 router.post("/payments/response", PaymentController.paymentResponse);
+router.get("/payments/response", PaymentController.paymentResponse);
 
 // CALENDAR
 // ========
@@ -193,6 +194,69 @@ router.post(
   "/files",
   AuthenticationController.isSignedIn,
   FileController.createFile,
+);
+
+// WORKFLOW
+// ========
+// Protected
+router.get(
+  "/workflow/",
+  AuthenticationController.isSignedIn,
+  WorkflowController.getWorkflow,
+);
+router.post(
+  "/workflow/",
+  AuthenticationController.isSignedIn,
+  WorkflowController.createWorkflow,
+);
+router.put(
+  "/workflow/",
+  AuthenticationController.isSignedIn,
+  WorkflowController.updateWorkflow,
+);
+router.get(
+  "/workflow/states",
+  AuthenticationController.isSignedIn,
+  WorkflowController.getWorkflowStates,
+);
+router.put(
+  "/workflow/task",
+  AuthenticationController.isSignedIn,
+  WorkflowController.updateTask,
+);
+router.put(
+  "/workflow/archive",
+  AuthenticationController.isSignedIn,
+  WorkflowController.archiveTask,
+);
+router.get(
+  "/workflow/backlog",
+  AuthenticationController.isSignedIn,
+  WorkflowController.getBacklog,
+);
+// ROLES
+// =====
+
+// Protected
+router.get(
+  "/roles",
+  AuthenticationController.isSignedIn,
+  RoleController.getRoles,
+);
+router.put(
+  "/roles",
+  AuthenticationController.isSignedIn,
+  RoleController.storeRole,
+);
+router.get(
+  "/roles/:id",
+  AuthenticationController.isSignedIn,
+  RoleController.getRole,
+);
+router.delete(
+  "/roles/:id",
+  AuthenticationController.isSignedIn,
+  RoleController.removeRole,
 );
 
 module.exports = router;

@@ -1,10 +1,11 @@
-const { Worker } = require("worker_threads");
-const path = require("path");
 const bunyan = require("bunyan");
-
-const BookableManager = require("../../../commons/data-managers/bookable-manager");
+const {
+  BookableManager,
+} = require("../../../commons/data-managers/bookable-manager");
 const BookingManager = require("../../../commons/data-managers/booking-manager");
-const ItemCheckoutService = require("../../../commons/services/checkout/item-checkout-service");
+const {
+  ItemCheckoutService,
+} = require("../../../commons/services/checkout/item-checkout-service");
 
 const logger = bunyan.createLogger({
   name: "calendar-controller.js",
@@ -22,18 +23,14 @@ const logger = bunyan.createLogger({
  */
 class CalendarController {
   /**
-   * Asynchronously fetches occupancies for all bookables for a given tenant.
+   * Fetches occupancies for all bookables for a given tenant.
+   * The occupancies are fetched asynchronously and combined into a single array.
    *
    * @async
-   * @static
    * @function getOccupancies
-   * @param {Object} request - The HTTP request object.
-   * @param {Object} response - The HTTP response object.
-   * @returns {void}
-   *
-   * @example
-   * // GET /api/<tenant>/calendar/occupancy?ids=1,2,3
-   * CalendarController.getOccupancies(req, res);
+   * @param {Object} request - The HTTP request object containing tenant and bookable IDs.
+   * @param {Object} response - The HTTP response object to send the result.
+   * @returns {Promise<void>} - A promise that resolves when the occupancies are fetched and sent.
    */
   static async getOccupancies(request, response) {
     const tenant = request.params.tenant;
@@ -48,34 +45,39 @@ class CalendarController {
       );
     }
 
-    /**
-     * Initializes a worker thread for each bookable to asynchronously fetch occupancies, returning promises for their
-     * resolutions or rejections.
-     */
-    const workers = bookables.map((bookable) => {
-      return new Promise((resolve, reject) => {
-        const worker = new Worker(
-          path.resolve(
-            __dirname,
-            "../../../commons/utilities/calendar-occupancy-worker.js",
-          ),
-        );
-        worker.postMessage({ bookable, tenant });
+    for (const bookable of bookables) {
+      const relatedBookables = await BookableManager.getRelatedBookables(
+        bookable.id,
+        tenant,
+      );
 
-        worker.on("message", resolve);
-        worker.on("error", reject);
-        worker.on("exit", (code) => {
-          if (code !== 0) {
-            reject(new Error(`Worker stopped with exit code ${code}`));
-          }
-        });
-      });
-    });
+      const relatedIds = relatedBookables.map((rb) => rb.id);
 
-    const results = await Promise.all(workers);
-    results.forEach((result) => {
-      occupancies = occupancies.concat(result);
-    });
+      let bookings = await BookingManager.getRelatedBookingsBatch(
+        tenant,
+        relatedIds,
+      );
+
+      const bookingMap = new Map();
+      for (const booking of bookings) {
+        bookingMap.set(booking.id, booking);
+      }
+      const uniqueBookings = [...bookingMap.values()];
+
+      occupancies.push(
+        ...uniqueBookings
+          .filter(
+            (booking) =>
+              !!booking.timeBegin && !!booking.timeEnd && !booking.isRejected,
+          )
+          .map((booking) => ({
+            bookableId: bookable.id,
+            title: bookable.title,
+            timeBegin: booking.timeBegin,
+            timeEnd: booking.timeEnd,
+          })),
+      );
+    }
 
     response.status(200).send(occupancies);
   }
@@ -115,6 +117,18 @@ class CalendarController {
       startDate.setHours(0, 0, 0, 0);
       endDate.setHours(23, 59, 59, 999);
 
+      const [parentBookables, bookable, relatedBookables] = await Promise.all([
+        BookableManager.getParentBookables(bookableId, tenant),
+        BookableManager.getBookable(bookableId, tenant),
+        BookableManager.getRelatedBookables(bookableId, tenant),
+      ]);
+
+      const bookableToCheck = [
+        ...relatedBookables,
+        bookable,
+        ...parentBookables,
+      ];
+
       let items = [];
 
       function combinePeriods(items, index = 0, combined = []) {
@@ -145,11 +159,31 @@ class CalendarController {
           }
         }
 
-        // Recursive call for the next item
         return combinePeriods(items, index + 1, combined);
       }
 
-      // Function to check availability for a given time range
+      /**
+       * Asynchronously checks the availability of a bookable item within a given time range.
+       *
+       * This function is used to determine whether a bookable item is available within a specified time range.
+       * It does this by creating an instance of the `ItemCheckoutService` class and calling its `checkAll` method.
+       * If the `checkAll` method throws an error, the function assumes that the bookable item is not available.
+       *
+       * If the time range is greater than 15 minutes, the function splits the time range into two halves
+       * and checks the availability for each half separately. This is done by calculating the middle point
+       * of the time range and then recursively calling the `checkAvailability` function for the first half
+       * (from `start` to `middle`) and the second half (from `middle` to `end`).
+       *
+       * If the time range is not greater than 15 minutes, the function marks the time range as unavailable.
+       * This is done by adding an object to the `items` array, with `timeBegin` and `timeEnd` set to `start`
+       * and `end` respectively, and `available` set to `false`.
+       *
+       * @async
+       * @function checkAvailability
+       * @param {number} start - The start time of the time range in milliseconds.
+       * @param {number} end - The end time of the time range in milliseconds.
+       * @returns {Promise<void>} A Promise that resolves when the availability check is complete.
+       */
       async function checkAvailability(start, end) {
         const ics = new ItemCheckoutService(
           user,
@@ -161,8 +195,18 @@ class CalendarController {
           null,
         );
 
+        await ics.init();
+
         try {
-          await ics.checkAll();
+          // in order to check calendar availability, we generally need to perform all checks of the checkout service.
+          // EXCEPTION: we do not need to check minimum / maximum durations when checking fixed time periods
+          await ics.checkPermissions();
+          await ics.checkOpeningHours();
+          await ics.checkAvailability();
+          await ics.checkEventSeats();
+          await ics.checkParentAvailability();
+          await ics.checkChildBookings();
+          await ics.checkMaxBookingDate();
         } catch {
           /**
            * Checks the availability of a bookable item within a given time range.
@@ -186,26 +230,137 @@ class CalendarController {
             await checkAvailability(start, middle);
             await checkAvailability(middle, end);
           } else {
-            const bookings = await BookingManager.getConcurrentBookings(
-              bookableId,
-              tenant,
-              start,
-              end,
-            );
-            if (bookings.length > 0) {
-              bookings.forEach((booking) => {
-                items.push({
-                  timeBegin: booking.timeBegin,
-                  timeEnd: booking.timeEnd,
-                  available: false,
+            for (const relatedBookable of bookableToCheck) {
+              const bookings = await BookingManager.getConcurrentBookings(
+                relatedBookable.id,
+                tenant,
+                start,
+                end,
+              );
+              if (bookings.length > 0) {
+                bookings.forEach((booking) => {
+                  items.push({
+                    timeBegin: booking.timeBegin,
+                    timeEnd: booking.timeEnd,
+                    available: false,
+                  });
                 });
-              });
+              }
             }
           }
         }
       }
 
-      await checkAvailability(startDate.getTime(), endDate.getTime());
+      /**
+       * Generates time periods based on the provided start date, end date, and opening hours.
+       * The function creates a list of time periods, each indicating whether a bookable item is available or not.
+       *
+       * @param {Date} startDate - The start date of the period.
+       * @param {Date} endDate - The end date of the period.
+       * @param {Array} openingHours - An array of objects, each containing the opening hours for a specific day of the week.
+       * @returns {Array} An array of time periods, each represented as an object with `start`, `end`, and `available` properties.
+       */
+      function generateTimePeriods(startDate, endDate, openingHours) {
+        if (openingHours.length === 0) {
+          return [
+            {
+              start: startDate.getTime(),
+              end: endDate.getTime(),
+              available: true,
+            },
+          ];
+        }
+        const periods = [];
+        let currentDate = new Date(startDate);
+
+        while (currentDate <= endDate) {
+          const weekday = ((currentDate.getDay() + 6) % 7) + 1; // monday = 1, ..., sunday = 7
+
+          const hoursForToday = openingHours.find((hours) =>
+            hours.weekdays.includes(weekday),
+          );
+
+          if (hoursForToday) {
+            const start = new Date(currentDate);
+            const [startHour, startMinute] = hoursForToday.startTime.split(":");
+            start.setHours(startHour, startMinute, 0, 0);
+
+            const end = new Date(currentDate);
+            const [endHour, endMinute] = hoursForToday.endTime.split(":");
+            end.setHours(endHour, endMinute, 0, 0);
+
+            periods.push({
+              start: start.getTime(),
+              end: end.getTime(),
+              available: true,
+            });
+
+            const startOfDay = new Date(currentDate);
+            startOfDay.setHours(0, 0, 0, 0);
+            const endOfDay = new Date(currentDate);
+            endOfDay.setHours(23, 59, 59, 999);
+
+            if (start.getTime() > startOfDay.getTime()) {
+              periods.push({
+                start: startOfDay.getTime(),
+                end: start.getTime(),
+                available: false,
+              });
+            }
+            if (end.getTime() < endOfDay.getTime()) {
+              periods.push({
+                start: end.getTime(),
+                end: endOfDay.getTime(),
+                available: false,
+              });
+            }
+          } else {
+            const startOfDay = new Date(currentDate);
+            startOfDay.setHours(0, 0, 0, 0);
+            const endOfDay = new Date(currentDate);
+            endOfDay.setHours(23, 59, 59, 999);
+
+            periods.push({
+              start: startOfDay.getTime(),
+              end: endOfDay.getTime(),
+              available: false,
+            });
+          }
+
+          currentDate.setDate(currentDate.getDate() + 1);
+        }
+
+        return periods;
+      }
+
+      const openingHours = bookableToCheck
+        .map((b) => {
+          if (b.isOpeningHoursRelated && b.openingHours.length > 0) {
+            return b.openingHours;
+          } else {
+            return [];
+          }
+        })
+        .flat();
+
+      const availablePeriods = generateTimePeriods(
+        startDate,
+        endDate,
+        openingHours,
+      );
+
+      for (const period of availablePeriods) {
+        if (period.available) {
+          await checkAvailability(period.start, period.end);
+        } else {
+          items.push({
+            timeBegin: period.start,
+            timeEnd: period.end,
+            available: false,
+          });
+        }
+      }
+
       items = combinePeriods(items);
 
       response.status(200).send(items);
@@ -213,6 +368,96 @@ class CalendarController {
       logger.error(error);
       response.status(500).send({ error: "Internal server error" });
     }
+  }
+
+  static getTimePeriodsPerHour(startDate, endDate, interval = 60000 * 60) {
+    var timePeriodsArray = [];
+    var currentDateTime = new Date(startDate);
+
+    while (currentDateTime <= endDate) {
+      var nextDateTime = new Date(currentDateTime.getTime() + interval);
+      timePeriodsArray.push({
+        timeBegin: currentDateTime.getTime(),
+        timeEnd: nextDateTime.getTime(),
+        available: false,
+      });
+      currentDateTime = nextDateTime;
+    }
+
+    return timePeriodsArray;
+  }
+
+  static async getBookableAvailabilityFixed(request, response) {
+    const {
+      params: { tenant, id: bookableId },
+      user,
+      query: { amount = 1, startDate: startDateQuery, endDate: endDateQuery },
+    } = request;
+
+    if (!tenant || !bookableId) {
+      return response
+        .status(400)
+        .send({ error: "Tenant ID and bookable ID are required." });
+    }
+
+    const startDate = startDateQuery ? new Date(startDateQuery) : new Date();
+    const endDate = endDateQuery
+      ? new Date(endDateQuery)
+      : new Date(startDate.getTime() + 60000 * 60 * 24 * 7);
+
+    startDate.setHours(0, 0, 0, 0);
+    endDate.setHours(23, 59, 59, 999);
+
+    const periods = CalendarController.getTimePeriodsPerHour(
+      startDate,
+      endDate,
+    );
+    for (const p of periods) {
+      const itemCheckoutService = new ItemCheckoutService(
+        user?.id,
+        tenant,
+        new Date(p.timeBegin),
+        new Date(p.timeEnd),
+        bookableId,
+        Number(amount),
+        null,
+      );
+
+      await itemCheckoutService.init();
+
+      try {
+        // in order to check calendar availability, we generally need to perform all checks of the checkout service.
+        // EXCEPTION: we do not need to check minimum / maximum durations when checking fixed time periods
+        await itemCheckoutService.checkPermissions();
+        await itemCheckoutService.checkOpeningHours();
+        await itemCheckoutService.checkAvailability();
+        await itemCheckoutService.checkEventSeats();
+        await itemCheckoutService.checkParentAvailability();
+        await itemCheckoutService.checkChildBookings();
+        await itemCheckoutService.checkMaxBookingDate();
+        p.available = true;
+      } catch {
+        p.available = false;
+      }
+    }
+
+    periods.sort((a, b) => a.timeBegin - b.timeBegin);
+
+    let combinedPeriods = [];
+    let currentPeriod = periods[0];
+
+    for (let i = 1; i < periods.length; i++) {
+      if (periods[i].available === currentPeriod.available) {
+        currentPeriod.timeEnd = periods[i].timeEnd;
+      } else {
+        combinedPeriods.push(currentPeriod);
+        currentPeriod = periods[i];
+      }
+    }
+
+    combinedPeriods.push(currentPeriod);
+
+    response.status(200).send(combinedPeriods);
   }
 }
 

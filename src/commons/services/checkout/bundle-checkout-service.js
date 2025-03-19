@@ -1,5 +1,8 @@
-const ItemCheckoutService = require("./item-checkout-service");
-const BookableManager = require("../../data-managers/bookable-manager");
+const {
+  ItemCheckoutService,
+  ManualItemCheckoutService,
+} = require("./item-checkout-service");
+const { BookableManager } = require("../../data-managers/bookable-manager");
 const BookingManager = require("../../data-managers/booking-manager");
 const CouponManager = require("../../data-managers/coupon-manager");
 const LockerService = require("../locker/locker-service");
@@ -10,10 +13,11 @@ const LockerService = require("../locker/locker-service");
 class BundleCheckoutService {
   /**
    * Create a bundle checkout service.
-   * @param {string} user - The user ID.
+   * @param {Object} user - The user Object.
    * @param {string} tenant - The tenant ID.
    * @param {Date} timeBegin - The start time.
-   * @param {Date} timeEnd - The end time.
+   * @param {Date} timeEnd - The end time,
+   * @param {Date} timeCreated - The creation time.
    * @param {Array} bookableItems - The items to be booked.
    * @param {string} couponCode - The coupon code.
    * @param {string} name - The name of the user.
@@ -24,12 +28,15 @@ class BundleCheckoutService {
    * @param {string} email - The email of the user.
    * @param {string} phone - The phone number of the user.
    * @param {string} comment - The comment of the user.
+   * @param {Array} attachmentStatus - The attachments of the user.
+   * @param {string} paymentProvider - The payment method.
    */
   constructor(
     user,
     tenant,
     timeBegin,
     timeEnd,
+    timeCreated,
     bookableItems,
     couponCode,
     name,
@@ -40,11 +47,14 @@ class BundleCheckoutService {
     email,
     phone,
     comment,
+    attachmentStatus,
+    paymentProvider,
   ) {
     this.user = user;
     this.tenant = tenant;
     this.timeBegin = timeBegin;
     this.timeEnd = timeEnd;
+    this.timeCreated = timeCreated || Date.now();
     this.bookableItems = bookableItems;
     this.couponCode = couponCode;
     this.name = name;
@@ -55,6 +65,23 @@ class BundleCheckoutService {
     this.email = email;
     this.phone = phone;
     this.comment = comment;
+    this.attachmentStatus = attachmentStatus;
+    this.paymentProvider = paymentProvider;
+  }
+
+  async createItemCheckoutService(bookableItem) {
+    const itemCheckoutService = new ItemCheckoutService(
+      this.user,
+      this.tenant,
+      this.timeBegin,
+      this.timeEnd,
+      bookableItem.bookableId,
+      bookableItem.amount,
+      this.couponCode,
+    );
+    await itemCheckoutService.init();
+
+    return itemCheckoutService;
   }
 
   async generateBookingReference(
@@ -80,7 +107,7 @@ class BundleCheckoutService {
     }
 
     if (ensureUnique) {
-      if (!!(await BookingManager.getBooking(text, this.tenant)._id)) {
+      if (!!(await BookingManager.getBooking(text, this.tenant).id)) {
         return await this.generateBookingReference(
           length,
           chunkLength,
@@ -95,14 +122,8 @@ class BundleCheckoutService {
   }
   async checkAll() {
     for (const bookableItem of this.bookableItems) {
-      const itemCheckoutService = new ItemCheckoutService(
-        this.user,
-        this.tenant,
-        this.timeBegin,
-        this.timeEnd,
-        bookableItem.bookableId,
-        bookableItem.amount,
-      );
+      const itemCheckoutService =
+        await this.createItemCheckoutService(bookableItem);
 
       await itemCheckoutService.checkAll();
     }
@@ -113,20 +134,23 @@ class BundleCheckoutService {
   async userPriceEur() {
     let total = 0;
     for (const bookableItem of this.bookableItems) {
-      const itemCheckoutService = new ItemCheckoutService(
-        this.user,
-        this.tenant,
-        this.timeBegin,
-        this.timeEnd,
-        bookableItem.bookableId,
-        bookableItem.amount,
-        this.couponCode,
-      );
-
-      total += await itemCheckoutService.userPriceEur();
+      total += bookableItem.userPriceEur * bookableItem.amount;
     }
 
     return Math.round(total * 100) / 100;
+  }
+
+  async userGrossPriceEur() {
+    let total = 0;
+    for (const bookableItem of this.bookableItems) {
+      total += bookableItem.userGrossPriceEur * bookableItem.amount;
+    }
+    return Math.round(total * 100) / 100;
+  }
+
+  async vatIncludedEur() {
+    const vat = (await this.userGrossPriceEur()) - (await this.userPriceEur());
+    return Math.round(vat * 100) / 100;
   }
 
   async isPaymentComplete() {
@@ -143,6 +167,14 @@ class BundleCheckoutService {
       if (!bookable.autoCommitBooking) return false;
     }
     return true;
+  }
+
+  performRejected() {
+    return false;
+  }
+
+  setPaymentMethod() {
+    return "";
   }
 
   async getLockerInfo() {
@@ -166,24 +198,69 @@ class BundleCheckoutService {
     return lockerInfo;
   }
 
-  async prepareBooking() {
+  processAttachments(bookableItems, attachmentStatus) {
+    const attachments = bookableItems.reduce((acc, bookableItem) => {
+      const itemAttachments = bookableItem._bookableUsed.attachments.map(
+        (attachment) => {
+          attachment.bookableId = bookableItem.bookableId;
+          return attachment;
+        },
+      );
+      return acc.concat(itemAttachments);
+    }, []);
+
+    return attachments.map((attachment) => {
+      const status = attachmentStatus?.find(
+        (status) => status.id === attachment.id,
+      );
+      return {
+        type: attachment.type,
+        title: attachment.title,
+        bookableId: attachment.bookableId,
+        url: attachment.url,
+        accepted: status ? status.accepted : undefined,
+      };
+    });
+  }
+
+  /**
+   * Prepares a booking by checking all bookable items and generating a booking reference.
+   *
+   * @async
+   * @function prepareBooking
+   * @param {Object} [options={}] - The options for preparing the booking.
+   * @param {boolean} [options.keepExistingId=false] - Whether to keep the existing booking ID.
+   * @param {string|null} [options.existingId=null] - The existing booking ID to keep, if any.
+   * @returns {Promise<Booking>} - A promise that resolves to the prepared booking object.
+   */
+  async prepareBooking({ keepExistingId = false, existingId = null } = {}) {
     await this.checkAll();
 
     for (const bookableItem of this.bookableItems) {
-      bookableItem._bookableUsed = await BookableManager.getBookable(
-        bookableItem.bookableId,
-        this.tenant,
-      );
+      const itemCheckoutService =
+        await this.createItemCheckoutService(bookableItem);
+      bookableItem.regularPriceEur =
+        await itemCheckoutService.regularPriceEur();
+      bookableItem.regularGrossPriceEur =
+        await itemCheckoutService.regularGrossPriceEur();
+      bookableItem.userPriceEur = await itemCheckoutService.userPriceEur();
+      bookableItem.userGrossPriceEur =
+        await itemCheckoutService.userGrossPriceEur();
+
+      bookableItem._bookableUsed = itemCheckoutService.bookableUsed;
       delete bookableItem._bookableUsed._id;
     }
 
     const booking = {
-      id: await this.generateBookingReference(),
-      tenant: this.tenant,
-      assignedUserId: this.user?.id,
+      id:
+        keepExistingId && existingId
+          ? existingId
+          : await this.generateBookingReference(),
+      tenantId: this.tenant,
+      assignedUserId: this.user,
       timeBegin: this.timeBegin,
       timeEnd: this.timeEnd,
-      timeCreated: Date.now(),
+      timeCreated: this.timeCreated,
       bookableItems: this.bookableItems,
       couponCode: this.couponCode,
       name: this.name,
@@ -194,9 +271,17 @@ class BundleCheckoutService {
       mail: this.email,
       phone: this.phone,
       comment: this.comment,
-      priceEur: await this.userPriceEur(),
+      attachments: this.processAttachments(
+        this.bookableItems,
+        this.attachmentStatus,
+      ),
+      priceEur: await this.userGrossPriceEur(),
+      vatIncludedEur: await this.vatIncludedEur(),
       isCommitted: await this.isAutoCommit(),
       isPayed: await this.isPaymentComplete(),
+      isRejected: this.performRejected(),
+      paymentProvider: this.paymentProvider,
+      paymentMethod: this.setPaymentMethod(),
       lockerInfo: await this.getLockerInfo(),
     };
 
@@ -223,6 +308,7 @@ class ManualBundleCheckoutService extends BundleCheckoutService {
    * @param {string} tenant - The tenant ID.
    * @param {Date} timeBegin - The start time.
    * @param {Date} timeEnd - The end time.
+   * @param timeCreated - The creation time.
    * @param {Array} bookableItems - The items to be booked.
    * @param {string} couponCode - The coupon code.
    * @param {string} name - The name of the user.
@@ -233,15 +319,20 @@ class ManualBundleCheckoutService extends BundleCheckoutService {
    * @param {string} email - The email of the user.
    * @param {string} phone - The phone number of the user.
    * @param {string} comment - The comment of the user.
-   * @param {number} priceEur - The price in Euros.
    * @param {boolean} isCommit - The commit status.
    * @param {boolean} isPayed - The payment status.
+   * @param {boolean} isRejected - The reject status.
+   * @param {Array} attachmentStatus - The attachments of the user.
+   * @param {string} paymentProvider - The payment method.
+   * @param {string} paymentMethod - The payment method.
+   * @param {Array} hooks - The hooks.
    */
   constructor(
     user,
     tenant,
     timeBegin,
     timeEnd,
+    timeCreated,
     bookableItems,
     couponCode,
     name,
@@ -252,15 +343,20 @@ class ManualBundleCheckoutService extends BundleCheckoutService {
     email,
     phone,
     comment,
-    priceEur,
     isCommit,
     isPayed,
+    isRejected,
+    attachmentStatus,
+    paymentProvider,
+    paymentMethod,
+    hooks,
   ) {
     super(
       user,
       tenant,
       timeBegin,
       timeEnd,
+      timeCreated,
       bookableItems,
       couponCode,
       name,
@@ -271,23 +367,34 @@ class ManualBundleCheckoutService extends BundleCheckoutService {
       email,
       phone,
       comment,
+      attachmentStatus,
+      paymentProvider,
     );
-    this.priceEur = priceEur;
     this.isCommitted = isCommit;
     this.isPayed = isPayed;
+    this.isRejected = isRejected;
+    this.paymentMethod = paymentMethod;
+    this.hooks = hooks;
+  }
+
+  async createItemCheckoutService(bookableItem) {
+    const itemCheckoutService = new ManualItemCheckoutService(
+      this.user,
+      this.tenant,
+      this.timeBegin,
+      this.timeEnd,
+      bookableItem.bookableId,
+      bookableItem.amount,
+      this.couponCode,
+    );
+
+    await itemCheckoutService.init(bookableItem._bookableUsed);
+
+    return itemCheckoutService;
   }
 
   checkAll() {
     return true;
-  }
-
-  async userPriceEur() {
-    const priceEur = Number(this.priceEur);
-    if (isNaN(priceEur) || priceEur < 0) {
-      await super.userPriceEur();
-    } else {
-      return priceEur;
-    }
   }
 
   async isAutoCommit() {
@@ -307,6 +414,14 @@ class ManualBundleCheckoutService extends BundleCheckoutService {
     } else {
       return await super.isPaymentComplete();
     }
+  }
+
+  performRejected() {
+    return this.isRejected;
+  }
+
+  setPaymentMethod() {
+    return this.paymentMethod;
   }
 }
 

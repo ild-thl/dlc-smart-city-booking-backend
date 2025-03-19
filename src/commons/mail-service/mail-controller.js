@@ -1,8 +1,18 @@
 const MailerService = require("./mail-service");
 const BookingManager = require("../data-managers/booking-manager");
-const BookableManager = require("../data-managers/bookable-manager");
+const { BookableManager } = require("../data-managers/bookable-manager");
 const EventManager = require("../data-managers/event-manager");
 const TenantManager = require("../data-managers/tenant-manager");
+const InstanceManager = require("../data-managers/instance-manager");
+const bunyan = require("bunyan");
+const PaymentUtils = require("../utilities/payment-utils");
+const UserManager = require("../data-managers/user-manager");
+const QRCode = require("qrcode");
+
+const logger = bunyan.createLogger({
+  name: "checkout-controller.js",
+  level: process.env.LOG_LEVEL,
+});
 
 class MailController {
   static formatDateTime(value) {
@@ -42,11 +52,64 @@ class MailController {
 
     for (const bookable of bookables) {
       bookable._populated = {
-        event: await EventManager.getEvent(bookable.eventId, bookable.tenant),
+        event: await EventManager.getEvent(bookable.eventId, bookable.tenantId),
       };
     }
 
     return bookables;
+  }
+
+  static async _sendBookingMail({
+    address,
+    bookingId,
+    tenantId,
+    subject,
+    title,
+    message,
+    includeQRCode = false,
+    attachments = [],
+    sendBCC = false,
+    addRejectionLink = false,
+  }) {
+    const tenant = await TenantManager.getTenant(tenantId);
+
+    let bookingDetails = "";
+    if (bookingId) {
+      bookingDetails = await this.generateBookingDetails(bookingId, tenantId);
+    }
+
+    let content = `${message}<br>${bookingDetails}`;
+
+    if (addRejectionLink) {
+      content += `<br /><br /><a href="${process.env.FRONTEND_URL}/booking/request-reject/${tenantId}?id=${bookingId}">Buchung stornieren</a>`;
+    }
+
+    if (includeQRCode) {
+      const { content: qrContent, attachment: qrAttachment } =
+        await this.generateQRCode(bookingId, tenantId);
+      content += `<br>${qrContent}`;
+      attachments = attachments
+        ? [...attachments, qrAttachment]
+        : [qrAttachment];
+    }
+
+    const model = {
+      title,
+      content,
+    };
+
+    const bccEmail = sendBCC ? tenant.mail : undefined;
+
+    await MailerService.send({
+      tenantId,
+      address,
+      subject,
+      mailTemplate: tenant.genericMailTemplate,
+      model,
+      attachments,
+      bcc: bccEmail,
+      useInstanceMail: tenant.useInstanceMail,
+    });
   }
 
   static async generateBookingDetails(bookingId, tenantId) {
@@ -112,6 +175,10 @@ class MailController {
                 </div>`;
       }
 
+      if (bookable.bookingNotes.length > 0) {
+        content += `${bookable.bookingNotes}`;
+      }
+
       content += `</div>`;
     }
 
@@ -131,6 +198,29 @@ class MailController {
     return content;
   }
 
+  static async generateQRCode(bookingId, tenantId) {
+    const booking = await BookingManager.getBooking(bookingId, tenantId);
+
+    const AppUrl = process.env.FRONTEND_URL;
+
+    const QRUrl = `${AppUrl}/booking/status/${tenantId}?id=${booking.id}&name=${encodeURIComponent(booking.name)}`;
+
+    const qrCodeBuffer = await QRCode.toBuffer(QRUrl);
+
+    const attachment = {
+      filename: "qrcode.png",
+      content: qrCodeBuffer,
+      cid: "qrcode_cid",
+    };
+
+    const content = `
+    <p>Mit diesem Link können Sie jederzeit den Status Ihrer Buchung einsehen.</p>
+    <a href="${QRUrl}">${QRUrl}</a>
+    <img src="cid:qrcode_cid" alt="QR Code" />`;
+
+    return { content, attachment };
+  }
+
   static async sendBookingConfirmation(
     address,
     bookingId,
@@ -138,128 +228,334 @@ class MailController {
     attachments = undefined,
   ) {
     const tenant = await TenantManager.getTenant(tenantId);
+    const includeQRCode = tenant.enablePublicStatusView;
 
-    let content = `<p>Im Folgenden senden wir Ihnen die Details Ihrer Buchung.</p><br>`;
-    content += await MailController.generateBookingDetails(bookingId, tenantId);
-
-    await MailerService.send(
-      tenantId,
+    await this._sendBookingMail({
       address,
-      `Vielen Dank für Ihre Buchung im ${tenant.name}`,
-      tenant.genericMailTemplate,
-      {
-        title: `Vielen Dank für Ihre Buchung im ${tenant.name}`,
-        content: content,
-      },
+      bookingId,
+      tenantId,
+      subject: `Vielen Dank für Ihre Buchung im ${tenant.name}`,
+      title: `Vielen Dank für Ihre Buchung im ${tenant.name}`,
+      message: `<p>Im Folgenden senden wir Ihnen die Details Ihrer Buchung.</p><br>`,
+      includeQRCode: includeQRCode,
       attachments,
-      tenant.mail,
-    );
+      sendBCC: true,
+      addRejectionLink: true,
+    });
+  }
+
+  static async sendBookingRejection(
+    address,
+    bookingId,
+    tenantId,
+    reason,
+    attachments = undefined,
+  ) {
+    const tenant = await TenantManager.getTenant(tenantId);
+
+    let message = `<p>Die nachfolgende Buchung wurde storniert:</p>`;
+    if (reason) {
+      reason = sanitizeReason(reason);
+      message += `<p><strong>Hinweis zur Stornierung</strong>: ${reason}</p>`;
+    }
+
+    await this._sendBookingMail({
+      address,
+      bookingId,
+      tenantId,
+      subject: `Stornierung: Ihre Buchung im ${tenant.name} wurde storniert`,
+      title: `Ihre Buchung im ${tenant.name} wurde storniert`,
+      message: message,
+      includeQRCode: false,
+      attachments,
+      sendBCC: true,
+      addRejectionLink: false,
+    });
+  }
+
+  static async sendVerifyBookingRejection(
+    address,
+    bookingId,
+    tenantId,
+    hookId,
+    reason,
+    attachments = undefined,
+  ) {
+    const tenant = await TenantManager.getTenant(tenantId);
+
+    let message = `<p>Für die nachfolgende Buchung wurde eine Stornierung vorgemerkt. Wenn Sie diese Stornierung bestätigen möchten, klicken Sie bitte auf den nachfolgenden Link.</p><p>Sollten Sie die Stornierung nicht veranlasst haben, können Sie diese Nachricht ignorieren.</p>`;
+
+    if (reason) {
+      reason = sanitizeReason(reason);
+      message += `<p><strong>Hinweis zur Stornierung</strong>: ${reason}</p>`;
+    }
+
+    message += `<p><a href="${process.env.FRONTEND_URL}/booking/verify-reject/${tenantId}?id=${bookingId}&hookId=${hookId}">Stornierung bestätigen</a></p>`;
+
+    await this._sendBookingMail({
+      address,
+      bookingId,
+      tenantId,
+      subject: `Stornierungsanfrage für Ihre Buchung im ${tenant.name}`,
+      title: `Stornierungsanfrage für Ihre Buchung im ${tenant.name}`,
+      message: message,
+      includeQRCode: false,
+      attachments,
+      sendBCC: false,
+      addRejectionLink: false,
+    });
   }
 
   static async sendFreeBookingConfirmation(address, bookingId, tenantId) {
     const tenant = await TenantManager.getTenant(tenantId);
-    let content = `<p>Im Folgenden senden wir Ihnen die Details Ihrer Buchung.</p><br>`;
-    content += await MailController.generateBookingDetails(bookingId, tenantId);
+    const includeQRCode = tenant.enablePublicStatusView;
 
-    await MailerService.send(
-      tenantId,
+    await this._sendBookingMail({
       address,
-      `Vielen Dank für Ihre Buchung im ${tenant.name}`,
-      tenant.genericMailTemplate,
-      {
-        title: `Vielen Dank für Ihre Buchung im ${tenant.name}`,
-        content: content,
-      },
-      undefined,
-      tenant.mail,
-    );
+      bookingId,
+      tenantId,
+      subject: `Vielen Dank für Ihre Buchung im ${tenant.name}`,
+      title: `Vielen Dank für Ihre Buchung im ${tenant.name}`,
+      message: `<p>Im Folgenden senden wir Ihnen die Details Ihrer Buchung.</p><br>`,
+      includeQRCode: includeQRCode,
+      attachments: undefined,
+      sendBCC: true,
+      addRejectionLink: true,
+    });
   }
 
   static async sendBookingRequestConfirmation(address, bookingId, tenantId) {
     const tenant = await TenantManager.getTenant(tenantId);
-    let content = `<p>Vielen Dank für Ihre Buchungsanfrage im ${tenant.name}. Wir haben Ihre Anfrage erhalten und bearbeiten diese schnellstmöglich.</p><br>`;
-    content += await MailController.generateBookingDetails(bookingId, tenantId);
 
-    await MailerService.send(
-      tenantId,
+    const includeQRCode = tenant.enablePublicStatusView;
+
+    await this._sendBookingMail({
       address,
-      `Vielen Dank für Ihre Buchungsanfrage im ${tenant.name}`,
-      tenant.genericMailTemplate,
-      {
-        title: `Vielen Dank für Ihre Buchungsanfrage im ${tenant.name}`,
-        content: content,
-      },
-    );
+      bookingId,
+      tenantId,
+      subject: `Vielen Dank für Ihre Buchungsanfrage im ${tenant.name}`,
+      title: `Vielen Dank für Ihre Buchungsanfrage im ${tenant.name}`,
+      message: `<p>Vielen Dank für Ihre Buchungsanfrage im ${tenant.name}. Wir haben Ihre Anfrage erhalten und bearbeiten diese schnellstmöglich.</p><br>`,
+      includeQRCode: includeQRCode,
+      attachments: undefined,
+      sendBCC: true,
+      addRejectionLink: true,
+    });
   }
 
-  static async sendPaymentRequest(address, bookingId, tenantId) {
+  static async sendInvoice(
+    address,
+    bookingId,
+    tenantId,
+    attachments = undefined,
+  ) {
     const tenant = await TenantManager.getTenant(tenantId);
-    let content = `<p>Vielen Dank für Ihre Buchungsanfrage im ${tenant.name}. Wir haben diese erfolgreich geprüft und freigegeben. Bitte nutzen Sie den folgenden Link, um Ihre Buchung abzuschließen.</p><br>`;
+    const includeQRCode = tenant.enablePublicStatusView;
 
-    const paymentLink = `${process.env.FRONTEND_URL}/payment/redirection?id=${bookingId}&tenant=${tenantId}`;
-    content += `<p><a href="${paymentLink}">${paymentLink}</a></p>`;
-
-    content += await MailController.generateBookingDetails(bookingId, tenantId);
-
-    await MailerService.send(
-      tenantId,
+    await this._sendBookingMail({
       address,
-      `Bitte schließen Sie Ihre Buchung im ${tenant.name} ab`,
-      tenant.genericMailTemplate,
-      {
-        title: `Bitte schließen Sie Ihre Buchung im ${tenant.name} ab`,
-        content: content,
-      },
-    );
+      bookingId,
+      tenantId,
+      subject: `Rechnung zu Ihrer Buchung bei ${tenant.name}`,
+      title: `Rechnung zu Ihrer Buchung bei ${tenant.name}`,
+      message: `<p>Vielen Dank für Ihre Buchung bei ${tenant.name}. Bitte überweisen Sie zur Vervollständigung Ihrer Buchung den im Anhang aufgeführten Betrag auf das angegebene Konto.</p><br>`,
+      includeQRCode: includeQRCode,
+      attachments,
+      sendBCC: true,
+      addRejectionLink: true,
+    });
+  }
+
+  static async sendPaymentLinkAfterBookingApproval(
+    address,
+    bookingId,
+    tenantId,
+  ) {
+    const tenant = await TenantManager.getTenant(tenantId);
+    const paymentLink = `${process.env.FRONTEND_URL}/payment/redirection?id=${bookingId}&tenant=${tenantId}`;
+    const includeQRCode = tenant.enablePublicStatusView;
+
+    await this._sendBookingMail({
+      address,
+      bookingId,
+      tenantId,
+      subject: `Bitte schließen Sie Ihre Buchung im ${tenant.name} ab`,
+      title: `Bitte schließen Sie Ihre Buchung im ${tenant.name} ab`,
+      message: `<p>Vielen Dank für Ihre Buchungsanfrage im ${tenant.name}. Wir haben diese erfolgreich geprüft und freigegeben. Bitte nutzen Sie den folgenden Link, um Ihre Buchung abzuschließen.</p><br><p><a href="${paymentLink}">${paymentLink}</a></p>`,
+      includeQRCode: includeQRCode,
+      sendBCC: false,
+      addRejectionLink: true,
+    });
+  }
+
+  static async sendInvoiceAfterBookingApproval(
+    address,
+    bookingId,
+    tenantId,
+    attachments = undefined,
+  ) {
+    const tenant = await TenantManager.getTenant(tenantId);
+    const includeQRCode = tenant.enablePublicStatusView;
+
+    await this._sendBookingMail({
+      address,
+      bookingId,
+      tenantId,
+      subject: `Bitte schließen Sie Ihre Buchung im ${tenant.name} ab`,
+      title: `Bitte schließen Sie Ihre Buchung im ${tenant.name} ab`,
+      message: `<p>Vielen Dank für Ihre Buchungsanfrage im ${tenant.name}. Wir haben diese erfolgreich geprüft und freigegeben. Bitte überweisen Sie zur Vervollständigung Ihrer Buchung den im Anhang aufgeführten Betrag auf das angegebene Konto.</p><br>`,
+      includeQRCode: includeQRCode,
+      attachments,
+      sendBCC: false,
+      addRejectionLink: true,
+    });
+  }
+
+  static async sendPaymentRequest(
+    address,
+    bookingId,
+    tenantId,
+    attachments = undefined,
+  ) {
+    try {
+      const booking = await BookingManager.getBooking(bookingId, tenantId);
+
+      if (!booking) {
+        throw new Error("Booking not found");
+      }
+
+      const paymentService = await PaymentUtils.getPaymentService(
+        tenantId,
+        bookingId,
+        booking.paymentProvider,
+        attachments,
+      );
+
+      await paymentService.paymentRequest();
+    } catch (error) {
+      logger.error(error);
+      throw error;
+    }
   }
 
   static async sendIncomingBooking(address, bookingId, tenantId) {
-    const tenant = await TenantManager.getTenant(tenantId);
-    let content = `<p>Es liegt eine neue Buchungsanfrage vor.</p><br>`;
-    content += await MailController.generateBookingDetails(bookingId, tenantId);
-    await MailerService.send(
-      tenantId,
+    await this._sendBookingMail({
       address,
-      "Eine neue Buchungsanfrage liegt vor",
-      tenant.genericMailTemplate,
-      {
-        title: "Eine neue Buchungsanfrage liegt vor",
-        content: content,
-      },
-    );
+      bookingId,
+      tenantId,
+      subject: `Eine neue Buchungsanfrage liegt vor`,
+      title: `Eine neue Buchungsanfrage liegt vor`,
+      message: `<p>Es liegt eine neue Buchungsanfrage vor.</p><br>`,
+      sendBCC: false,
+      addRejectionLink: false,
+    });
   }
 
-  static async sendVerificationRequest(address, hookId, tenantId) {
-    const tenant = await TenantManager.getTenant(tenantId);
-    let content = `<p>Um Ihre E-Mail-Adresse zu bestätigen, klicken Sie bitte auf den nachfolgenden Link</p><a href="${process.env.BACKEND_URL}/auth/${tenantId}/verify/${hookId}">${process.env.BACKEND_URL}/auth/${tenantId}/verify/${hookId}</a>`;
+  static async sendNewBooking(address, bookingId, tenantId) {
+    const message = `<p>Es liegt eine neue Buchung vor.</p><br>`;
 
-    await MailerService.send(
-      tenantId,
+    await this._sendBookingMail({
       address,
-      "Bestätigen Sie Ihre E-Mail-Adresse",
-      tenant.genericMailTemplate,
-      {
+      bookingId,
+      tenantId,
+      subject: "Eine neue Buchung liegt vor",
+      title: "Eine neue Buchung liegt vor",
+      message,
+      sendBCC: false,
+    });
+  }
+
+  static async sendVerificationRequest(address, hookId) {
+    let content = `<p>Um Ihre E-Mail-Adresse zu bestätigen, klicken Sie bitte auf den nachfolgenden Link</p><a href="${process.env.BACKEND_URL}/auth/verify/${hookId}">${process.env.BACKEND_URL}/auth/verify/${hookId}</a>`;
+    const instance = await InstanceManager.getInstance(false);
+
+    await MailerService.send({
+      address,
+      subject: "Bestätigen Sie Ihre E-Mail-Adresse",
+      mailTemplate: instance.mailTemplate,
+      model: {
         title: "Bestätigen Sie Ihre E-Mail-Adresse",
         content: content,
       },
-    );
+    });
   }
 
-  static async sendPasswordResetRequest(address, hookId, tenantId) {
-    const tenant = await TenantManager.getTenant(tenantId);
-    let content = `<p>Ihr Kennwort wurde geändert. Um die Änderung zu bestätigen, klicken Sie bitte auf den nachfolgenden Link.<br>Falls Sie keine Änderung an Ihrem Kennwort vorgenommen haben, können Sie diese Nachricht ignorieren.</p><a href="${process.env.BACKEND_URL}/auth/${tenantId}/reset/${hookId}">${process.env.BACKEND_URL}/auth/${tenantId}/reset/${hookId}</a>`;
+  static async sendPasswordResetRequest(address, hookId) {
+    let content = `<p>Ihr Kennwort wurde geändert. Um die Änderung zu bestätigen, klicken Sie bitte auf den nachfolgenden Link.<br>Falls Sie keine Änderung an Ihrem Kennwort vorgenommen haben, können Sie diese Nachricht ignorieren.</p><a href="${process.env.BACKEND_URL}/auth/reset/${hookId}">${process.env.BACKEND_URL}/auth/reset/${hookId}</a>`;
+    const instance = await InstanceManager.getInstance(false);
 
-    await MailerService.send(
-      tenantId,
+    await MailerService.send({
       address,
-      "Bestätigen Sie die Änderung Ihres Passworts",
-      tenant.genericMailTemplate,
-      {
-        title: "Bestätigen Sie die Änderung Ihres Passworts",
+      subject: "Bestätigen Sie die Änderung Ihres Kennworts",
+      mailTemplate: instance.mailTemplate,
+      model: {
+        title: "Bestätigen Sie die Änderung Ihres Kennworts",
         content: content,
       },
-    );
+    });
   }
+
+  static async sendUserCreated(userId) {
+    const instance = await InstanceManager.getInstance(false);
+
+    const user = await UserManager.getUser(userId);
+
+    let content = `<p>Ein neuer Benutzer wurde erstellt.</p><br>`;
+    content += `<p>Vorname: ${user.firstName}</p>`;
+    content += `<p>Nachname: ${user.lastName}</p>`;
+    content += `<p>Firma: ${user.company}</p>`;
+    content += `<p>E-Mail: ${user.id}</p>`;
+    content += `<br>`;
+    content += `<p> Registrierungsdatum: ${MailController.formatDateTime(user.created)}</p>`;
+
+    await MailerService.send({
+      address: instance.mailAddress,
+      subject: "Ein neuer Benutzer wurde erstellt",
+      mailTemplate: instance.mailTemplate,
+      model: {
+        title: "Ein neuer Benutzer wurde erstellt",
+        content: content,
+      },
+    });
+  }
+
+  static async sendWorkflowNotification({
+    sendTo,
+    tenantId,
+    bookingId,
+    oldStatus,
+    newStatus,
+  }) {
+    const tenant = await TenantManager.getTenant(tenantId);
+
+    let content = `<p>Guten Tag</p><br>`;
+    content += `<p>bitte beachten Sie, dass sich der Status der folgenden Buchung geändert hat:</p>`;
+    content += `<ul>`;
+    content += `<li><strong>Buchungsnummer:</strong> ${bookingId}</li>`;
+    content += `<li><strong>Mandant:</strong> ${tenant.name}</li>`;
+    content += `<li><strong>Alter Status:</strong> ${oldStatus}</li>`;
+    content += `<li><strong>Neuer Status:</strong> ${newStatus}</li>`;
+    content += `</ul>`;
+    content += `<p>Aufgrund dieser Änderung ist ggf. eine Prüfung oder weitere Bearbeitung erforderlich.</p>`;
+
+    await MailerService.send({
+      address: sendTo,
+      subject: `Änderung bei der Buchung Nr. ${bookingId} - Neuer Status`,
+      mailTemplate: tenant.genericMailTemplate,
+      model: {
+        title: `Änderung bei der Buchung Nr. ${bookingId} - Neuer Status`,
+        content: content,
+      },
+      useInstanceMail: tenant.useInstanceMail,
+    });
+  }
+}
+
+function sanitizeReason(reason) {
+  if (typeof reason === "string" && reason.trim() !== "") {
+    return reason.replace(/<[^>]*>?/gm, "");
+  }
+  return reason;
 }
 
 module.exports = MailController;

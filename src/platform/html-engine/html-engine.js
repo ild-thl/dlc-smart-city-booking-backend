@@ -1,4 +1,6 @@
-const BookableManager = require("../../commons/data-managers/bookable-manager");
+const {
+  BookableManager,
+} = require("../../commons/data-managers/bookable-manager");
 const TenantManager = require("../../commons/data-managers/tenant-manager");
 
 class HtmlEngine {
@@ -26,7 +28,7 @@ class HtmlEngine {
     }
 
     for (const bookable of bookables) {
-      const tenantObj = await TenantManager.getTenant(bookable.tenant);
+      const tenantObj = await TenantManager.getTenant(bookable.tenantId);
 
       htmlOutput += '<li class="bt-' + bookable.type + '">';
       htmlOutput += this.generateImageHtml(
@@ -85,7 +87,7 @@ class HtmlEngine {
           "/checkout?id=" +
           bookable.id +
           "&tenant=" +
-          bookable.tenant +
+          bookable.tenantId +
           '" class="btn-booking" target="_blank">' +
           buttonText +
           "</a>";
@@ -177,14 +179,14 @@ class HtmlEngine {
         "/checkout?id=" +
         bookable.id +
         "&tenant=" +
-        bookable.tenant +
+        bookable.tenantId +
         '" class="btn-booking" target="_blank">' +
         buttonText +
         "</a>";
     }
 
     let relatedBookables = (
-      await BookableManager.getRelatedBookables(bookable.id, bookable.tenant)
+      await BookableManager.getRelatedBookables(bookable.id, bookable.tenantId)
     ).filter((bookable) => bookable.isPublic === true);
 
     if (relatedBookables.length > 0) {
@@ -205,7 +207,7 @@ class HtmlEngine {
     var htmlOutput = '<ul class="booking-manager-list">';
 
     for (const event of events) {
-      const tenantObj = await TenantManager.getTenant(event.tenant);
+      const tenantObj = await TenantManager.getTenant(event.tenantId);
 
       let tags = "";
       event.information.tags.forEach((tag) => {
@@ -241,6 +243,18 @@ class HtmlEngine {
       htmlOutput +=
         '<p class="organizer-name">' +
         (event.eventOrganizer?.name || "") +
+        "</p>";
+      htmlOutput +=
+        '<p class="contact-name">' +
+        (event.eventOrganizer?.contactPersonName || "") +
+        "</p>";
+      htmlOutput +=
+        '<p class="contact-phone">' +
+        (event.eventOrganizer?.contactPersonPhoneNumber || "") +
+        "</p>";
+      htmlOutput +=
+        '<p class="contact-email">' +
+        (event.eventOrganizer?.contactPersonEmailAddress || "") +
         "</p>";
       htmlOutput +=
         '<p class="teaser-text">' +
@@ -354,7 +368,7 @@ class HtmlEngine {
     if (event.eventLocation.room) {
       var eventLocationBookable = await BookableManager.getBookable(
         event.eventLocation.room,
-        event.tenant,
+        event.tenantId,
       );
       htmlOutput += `<div class="room">${eventLocationBookable.title}</div>`;
     }
@@ -489,7 +503,7 @@ class HtmlEngine {
     }
 
     let relatedTickets = (
-      await BookableManager.getBookables(event.tenant)
+      await BookableManager.getBookables(event.tenantId)
     ).filter(
       (bookable) =>
         bookable.type === "ticket" &&

@@ -2,6 +2,7 @@ const UserManager = require("../../../commons/data-managers/user-manager");
 const SsoService = require("../../../commons/services/sso/sso-service");
 const { User, HookTypes } = require("../../../commons/entities/user");
 const bunyan = require("bunyan");
+const MailController = require("../../../commons/mail-service/mail-controller");
 
 const logger = bunyan.createLogger({
   name: "authentication-controller.js",
@@ -22,19 +23,45 @@ class AuthenticationController {
     }
   }
 
-  static signin(request, response) {
+  static async signin(request, response) {
     const user = request.user;
+    try {
+      const permissions = await UserManager.getUserPermissions(user.id);
+      logger.info(`User ${user.id} signed in.`);
+      response.status(200).send({ user, permissions });
+    } catch (error) {
+      logger.error(`could not sign in ${user?.id}`, error);
+      response.sendStatus(500);
+    }
+  }
 
-    UserManager.getUserPermissions(user.id, user.tenant)
-      .then((permissions) => {
-        user.permissions = permissions;
-        logger.info(`User ${user.id} signed in.`);
-        response.status(200).send(user);
-      })
-      .catch((err) => {
-        logger.error(err);
-        response.sendStatus(500);
-      });
+  static async ssoLogin(request, response, next) {
+    try {
+      const {
+        body: { token },
+        params: { tenant },
+      } = request;
+      const user = await SsoService.handleLogin(tenant, token);
+
+      if (user) {
+        request.login(user, { session: true }, async (err) => {
+          if (err) {
+            return next(err);
+          }
+          request.session.save((err) => {
+            if (err) {
+              return next(err);
+            }
+            response.status(200).send(user);
+          });
+        });
+      } else {
+        response.sendStatus(401);
+      }
+    } catch (error) {
+      response.status(error.status || 500).send(error.message);
+      logger.error(error);
+    }
   }
 
   static async ssoLogin(request, response, next) {
@@ -73,32 +100,34 @@ class AuthenticationController {
       request.body.firstName &&
       request.body.lastName
     ) {
-      UserManager.getUser(request.body.id, request.params.tenant).then(
-        (user) => {
-          if (user) {
-            response.sendStatus(409);
-          } else {
-            const user = new User(
-              request.body.id,
-              undefined,
-              request.params.tenant,
-              request.body.firstName,
-              request.body.lastName,
-            );
-            user.setPassword(request.body.password);
+      UserManager.getUser(request.body.id).then((user) => {
+        if (user) {
+          response.sendStatus(409);
+        } else {
+          const user = new User({
+            id: request.body.id,
+            secret: undefined,
+            tenant: request.params.tenant,
+            firstName: request.body.firstName,
+            lastName: request.body.lastName,
+            company: request.body.company,
+          });
+          user.setPassword(request.body.password);
 
-            UserManager.signupUser(user)
-              .then(() => {
-                logger.info(`User ${user.id} signed up.`);
-                response.status(201).send({ tenantId: request.params.tenant });
-              })
-              .catch((err) => {
-                logger.error(err);
-                response.status(500).send("could not signup user");
-              });
-          }
-        },
-      );
+          UserManager.signupUser(user)
+            .then(async () => {
+              logger.info(`User ${user.id} signed up.`);
+
+              await MailController.sendUserCreated(user.id);
+
+              response.sendStatus(201);
+            })
+            .catch((err) => {
+              logger.error(err);
+              response.status(500).send("could not signup user");
+            });
+        }
+      });
     } else {
       response.sendStatus(400);
     }
@@ -117,7 +146,20 @@ class AuthenticationController {
     }
   }
 
-  static signout(request, response) {
+  static async ssoSignup(request, response) {
+    try {
+      const {
+        body: { token },
+        params: { tenant },
+      } = request;
+      await SsoService.handleSignup(tenant, token);
+      response.sendStatus(201);
+    } catch (error) {
+      response.status(error.status).send(error.message);
+    }
+  }
+
+  static signout(request, response, next) {
     request.logout(function (err) {
       if (err) {
         return next(err);
@@ -126,19 +168,19 @@ class AuthenticationController {
     response.sendStatus(200);
   }
 
-  static me(request, response) {
-    var user = Object.assign(new User(), request.user);
-    var userPublic = user.exportPublic();
+  static async me(request, response) {
+    try {
+      const user = request.user;
+      if (!user) {
+        response.status(401);
+        return;
+      }
 
-    if (request.query.populatePermissions === "1") {
-      UserManager.getUserPermissions(user.id, user.tenant).then(
-        (permissions) => {
-          userPublic.permissions = permissions;
-          response.status(200).send(userPublic);
-        },
-      );
-    } else {
-      response.status(200).send(userPublic);
+      const permissions = await UserManager.getUserPermissions(user.id);
+
+      response.status(200).send({ user, permissions });
+    } catch {
+      response.sendStatus(500);
     }
   }
 
@@ -169,10 +211,9 @@ class AuthenticationController {
   static resetPassword(request, response) {
     var id = request.body.id;
     var password = request.body.password;
-    var tenant = request.params.tenant;
 
     if (id && password) {
-      UserManager.getUser(id, tenant)
+      UserManager.getUser(id, true)
         .then((user) => {
           if (user) {
             UserManager.resetPassword(user, password)
