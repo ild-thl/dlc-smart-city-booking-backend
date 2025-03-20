@@ -21,26 +21,36 @@ class TenantController {
     try {
       const { user } = request;
       const publicTenants = request.query.publicTenants === "true";
-      const permissions = await UserManager.getUserPermissions(user.id);
-      const tenantIds = permissions.tenants.map((p) => p.tenantId);
+      const isAuthenticated = request.isAuthenticated();
 
       const tenants = await TenantManager.getTenants();
 
-      const allowedTenants = [];
-      for (const tenant of tenants) {
-        if (publicTenants) {
-          tenant.removePrivateData();
-          if (tenantIds.includes(tenant.id)) {
+      if (isAuthenticated && user) {
+        const permissions = await UserManager.getUserPermissions(user.id);
+        const tenantIds = permissions.tenants.map((p) => p.tenantId);
+        const allowedTenants = [];
+        for (const tenant of tenants) {
+          if (publicTenants) {
+            tenant.removePrivateData();
+            if (tenantIds.includes(tenant.id)) {
+              allowedTenants.push(tenant);
+            }
+          } else if (
+            (await PermissionService._isTenantOwner(user.id, tenant.id)) ||
+            (await PermissionService._isInstanceOwner(user.id))
+          ) {
             allowedTenants.push(tenant);
           }
-        } else if (
-          (await PermissionService._isTenantOwner(user.id, tenant.id)) ||
-          (await PermissionService._isInstanceOwner(user.id))
-        ) {
-          allowedTenants.push(tenant);
         }
+        response.status(200).send(allowedTenants);
+      } else {
+        const filteredTenants = tenants
+          .map((tenant) => {
+            tenant.removePrivateData();
+            return tenant;
+          });
+        response.status(200).send(filteredTenants);
       }
-      response.status(200).send(allowedTenants);
     } catch (error) {
       logger.error(error);
       response.sendStatus(500);

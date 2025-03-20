@@ -19,9 +19,7 @@ passport.use(
       passReqToCallback: true,
     },
     (request, id, password, done) => {
-      const tenant = request.params.tenant;
-
-      UserManager.getUser(id, tenant).then((user) => {
+      UserManager.getUser(id, true).then((user) => {
         if (
           user !== undefined &&
           user.isVerified &&

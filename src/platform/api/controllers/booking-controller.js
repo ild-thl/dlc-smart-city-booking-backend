@@ -118,7 +118,11 @@ class BookingController {
       const user = request.user;
 
       //TODO: Check if user is authenticated
-      const hasPermission = user.tenant === tenant;
+      // const hasPermission = user.tenant === tenant;
+      // haspermission if user has a tenant with tenantid === tenant
+      const hasPermission = user.permissions.tenants.some(
+        (tenantPermission) => tenantPermission.tenantId === tenant,
+      );
 
       if (hasPermission) {
         const bookings = await BookingManager.getAssignedBookings(

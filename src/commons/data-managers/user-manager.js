@@ -23,8 +23,10 @@ class UserManager {
   static async signupUser(user) {
     try {
       const newUser = await UserModel.create(user);
-      console.log("User created", newUser);
-      await UserManager.requestVerification(new User(newUser));
+      if (!user.isVerified) {
+        await UserManager.requestVerification(new User(newUser));
+      }
+      return newUser;
     } catch (err) {
       throw err;
     }
@@ -128,9 +130,9 @@ class UserManager {
     }
   }
 
-  static async getUserPermissions(userId) {
+  static async getUserPermissions(userId, tenantId = null) {
     const tenantPermissions = [];
-    const tenants = await TenantManager.getTenants();
+    const tenants = tenantId ? [await TenantManager.getTenant(tenantId)] : await TenantManager.getTenants();
     const instance = await InstanceManager.getInstance(false);
 
     for (const tenant of tenants) {
@@ -210,6 +212,31 @@ class UserManager {
     }
 
     return permissions;
+  }
+
+  static async getUserRoles(userId, tenantId) {
+    const userRoles = [];
+    const tenant = await TenantManager.getTenant(tenantId);
+
+    let tenantUserRef = tenant.users.find(
+      (userRef) => userRef.userId === userId,
+    );
+
+    if (tenantUserRef) {
+      const roles = await Promise.all(
+        tenantUserRef.roles.map((roleId) =>
+          RoleManager.getRole(roleId, tenant.id),
+        ),
+      );
+
+      for (const role of roles) {
+        if (role) {
+          userRoles.push(role.id);
+        }
+      }
+    }
+
+    return userRoles;
   }
 }
 

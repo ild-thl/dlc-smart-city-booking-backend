@@ -22,7 +22,6 @@ class User {
     created,
     company,
     isSuspended,
-    roles,
     authType,
   }) {
     this.id = id;
@@ -38,7 +37,6 @@ class User {
     this.created = created || Date.now();
     this.company = company;
     this.isSuspended = isSuspended || false;
-    this.roles = roles || [];
     this.authType = authType || "local";
   }
 
@@ -111,12 +109,13 @@ class User {
       address: { type: String, default: "" },
       zipCode: { type: String, default: "" },
       city: { type: String, default: "" },
-      secret: { type: String, required: true },
+      secret: { type: String, required: false },
       hooks: { type: Array, default: [] },
       isVerified: { type: Boolean, default: false },
       created: { type: Double, default: Date.now() },
       company: { type: String, default: "" },
       isSuspended: { type: Boolean, default: false },
+      authType: { type: String, default: "local" },
     };
   }
 }

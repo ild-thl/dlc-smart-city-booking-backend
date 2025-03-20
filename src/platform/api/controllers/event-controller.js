@@ -134,7 +134,7 @@ class EventController {
           RolePermission.MANAGE_BOOKABLES,
         )
       ) {
-        await EventManager.storeEvent(event);
+        await EventManager.storeEvent(event, false);
         logger.info(
           `${tenant} -- updated event ${event.id} by user ${user?.id}`,
         );

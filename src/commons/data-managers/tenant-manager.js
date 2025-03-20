@@ -1,15 +1,5 @@
 const Tenant = require("../entities/tenant");
 const TenantModel = require("./models/tenantModel");
-const SecurityUtils = require("../utilities/security-utils");
-const { KeycloakApplication, APP_IDS } = require("../entities/application");
-
-const TENANT_ENCRYPT_KEYS = [
-  "paymentMerchantId",
-  "paymentProjectId",
-  "paymentSecret",
-  "noreplyPassword",
-  "password",
-];
 
 /**
  * Data Manager for Tenant objects.
@@ -22,18 +12,7 @@ class TenantManager {
   static async getTenants() {
     const rawTenants = await TenantModel.find();
     return rawTenants.map((rt) => {
-      const tenant = new Tenant(rt);
-      tenant.applications = tenant.applications.map((app) => {
-        let application;
-        if (app.id === APP_IDS.KEYCLOAK) {
-          application = Object.assign(new KeycloakApplication(), app);
-        } else {
-          return SecurityUtils.decryptObject(app, TENANT_ENCRYPT_KEYS);
-        }
-        application.decryptSecret();
-        return application;
-      });
-      return SecurityUtils.decryptObject(tenant, TENANT_ENCRYPT_KEYS);
+      return new Tenant(rt);
     });
   }
 
@@ -48,18 +27,7 @@ class TenantManager {
     if (!rawTenant) {
       return null;
     }
-    const tenant = new Tenant(rawTenant);
-    tenant.applications = tenant.applications.map((app) => {
-      let application;
-      if (app.id === APP_IDS.KEYCLOAK) {
-        application = Object.assign(new KeycloakApplication(), app);
-      } else {
-        return SecurityUtils.decryptObject(app, TENANT_ENCRYPT_KEYS);
-      }
-      application.decryptSecret();
-      return application;
-    });
-    return SecurityUtils.decryptObject(tenant, TENANT_ENCRYPT_KEYS);
+    return new Tenant(rawTenant);
   }
 
   /**
@@ -72,20 +40,7 @@ class TenantManager {
   static async storeTenant(tenant, upsert = true) {
     const newTenant = new Tenant(tenant);
 
-    newTenant.applications = newTenant.applications.map((app) => {
-      let application;
-      if (app.id === APP_IDS.KEYCLOAK) {
-        application = Object.assign(new KeycloakApplication(), app);
-      } else {
-        return SecurityUtils.encryptObject(app, TENANT_ENCRYPT_KEYS);
-      }
-      application.encryptSecret();
-      return application;
-    });
-    
-    const encryptedTenant = SecurityUtils.encryptObject(newTenant, TENANT_ENCRYPT_KEYS);
-
-    await TenantModel.updateOne({ id: tenant.id }, encryptedTenant, {
+    await TenantModel.updateOne({ id: tenant.id }, newTenant, {
       upsert: upsert,
       setDefaultsOnInsert: true,
     });
@@ -106,52 +61,21 @@ class TenantManager {
   static async getTenantApps(tenantId) {
     const rawTenant = await TenantModel.findOne({ id: tenantId });
     const tenant = new Tenant(rawTenant);
-    tenant.applications = tenant.applications.map((app) => {
-      let application;
-      if (app.id === APP_IDS.KEYCLOAK) {
-        application = Object.assign(new KeycloakApplication(), app);
-      } else {
-        return SecurityUtils.decryptObject(app, TENANT_ENCRYPT_KEYS);
-      }
-      application.decryptSecret();
-      return application;
-    });
     return tenant.applications;
   }
 
   static async getTenantApp(tenantId, appId) {
-    try {
-      const tenant = await dbm.get().collection("tenants").findOne({
-        id: tenantId,
-      });
-      const application = tenant.applications.find((app) => app.id === appId);
-      
-      if (application.id === APP_IDS.KEYCLOAK) {
-        const app = Object.assign(new KeycloakApplication(), application);
-        app.decryptSecret();
-        return app;
-      } else {
-        return SecurityUtils.decryptObject(application, TENANT_ENCRYPT_KEYS);
-      }
-    } catch (err) {
-      throw new Error(`No tenant found with ID: ${tenantId}`);
-    }
+    const rawTenant = await TenantModel.findOne({ id: tenantId });
+
+    const tenant = new Tenant(rawTenant);
+    return tenant.applications.find((app) => app.id === appId);
   }
 
   static async getTenantAppByType(tenantId, appType) {
     const rawTenant = await TenantModel.findOne({ id: tenantId });
 
     const tenant = new Tenant(rawTenant);
-    const applications = tenant.applications.filter((app) => app.type === appType);
-    return applications.map((app) => {
-      if (app.id === APP_IDS.KEYCLOAK) {
-        const application = Object.assign(new KeycloakApplication(), app);
-        application.decryptSecret();
-        return application;
-      } else {
-        return SecurityUtils.decryptObject(app, TENANT_ENCRYPT_KEYS);
-      }
-    });
+    return tenant.applications.filter((app) => app.type === appType);
   }
 
   static async checkTenantCount() {

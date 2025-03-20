@@ -48,11 +48,13 @@ class AuthenticationController {
           if (err) {
             return next(err);
           }
-          request.session.save((err) => {
+          request.session.save(async (err) => {
             if (err) {
               return next(err);
             }
-            response.status(200).send(user);
+            const permissions = await UserManager.getUserPermissions(user.id);
+            logger.info(`User ${user.id} signed in.`);
+            response.status(200).send({ user, permissions });
           });
         });
       } else {
@@ -142,20 +144,7 @@ class AuthenticationController {
       await SsoService.handleSignup(tenant, token);
       response.sendStatus(201);
     } catch (error) {
-      response.status(error.status).send(error.message);
-    }
-  }
-
-  static async ssoSignup(request, response) {
-    try {
-      const {
-        body: { token },
-        params: { tenant },
-      } = request;
-      await SsoService.handleSignup(tenant, token);
-      response.sendStatus(201);
-    } catch (error) {
-      response.status(error.status).send(error.message);
+      response.status(500).send(error.message);
     }
   }
 

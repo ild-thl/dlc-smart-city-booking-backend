@@ -16,8 +16,8 @@ router.post(
   passport.authenticate("local-signin"),
   AuthenticationController.signin,
 );
-router.post("/sso/signin", AuthenticationController.ssoLogin);
-router.post("/sso/signup", AuthenticationController.ssoSignup);
+router.post("/:tenant/sso/signin", AuthenticationController.ssoLogin);
+router.post("/:tenant/sso/signup", AuthenticationController.ssoSignup);
 router.get(
   "/me",
   AuthenticationController.isSignedIn,
