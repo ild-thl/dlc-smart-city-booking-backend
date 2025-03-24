@@ -254,8 +254,7 @@ class ItemCheckoutService {
 
     if (!isAvailable) {
       throw new Error(
-        `Das Objekt ${this.originBookable.title} ist nur noch ${
-          this.originBookable.amount - amountBooked
+        `Das Objekt ${this.originBookable.title} ist nur noch ${this.originBookable.amount - amountBooked
         } mal verfügbar.`,
       );
     }
@@ -280,7 +279,7 @@ class ItemCheckoutService {
         isAvailable =
           !parentBookable.amount ||
           parentAmountBooked + amountBooked + this.amount <=
-            parentBookable.amount;
+          parentBookable.amount;
       } else {
         isAvailable =
           !parentBookable.amount || parentAmountBooked < parentBookable.amount;
