@@ -109,6 +109,9 @@ class BookableManager {
     }
     combined = [...uniqueMap.values()];
 
+    // Remove origin bookable, exclude bookables where .id == id
+    combined = combined.filter((b) => b.id !== id);
+
     return combined.map((b) => new Bookable(b));
   }
 
