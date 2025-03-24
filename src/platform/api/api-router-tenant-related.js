@@ -27,7 +27,6 @@ router.get(
 );
 router.get("/bookables/:id/occupancy", BookableController.getBookableOccupancy);
 
-
 // Protected
 router.get(
   "/bookables",

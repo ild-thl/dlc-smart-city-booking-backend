@@ -44,11 +44,10 @@ class TenantController {
         }
         response.status(200).send(allowedTenants);
       } else {
-        const filteredTenants = tenants
-          .map((tenant) => {
-            tenant.removePrivateData();
-            return tenant;
-          });
+        const filteredTenants = tenants.map((tenant) => {
+          tenant.removePrivateData();
+          return tenant;
+        });
         response.status(200).send(filteredTenants);
       }
     } catch (error) {

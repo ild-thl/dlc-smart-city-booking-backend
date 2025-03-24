@@ -170,8 +170,6 @@ class BookableController {
       const user = request.user;
       const id = request.params.id;
 
-      console.log("id", id);
-
       if (!id) {
         logger.warn(`${tenant} -- Could not get bookable. No id provided.`);
         return response.status(400).send(`${tenant} -- No id provided`);
@@ -504,7 +502,7 @@ class BookableController {
    * This method provides information about the current occupancy of a bookable.
    * It returns details about how many units are available and how many are already booked.
    * This endpoint does not require authentication.
-   * 
+   *
    * @param {Object} request - The HTTP request object with id parameter and optional timeBegin, timeEnd, and amount query parameters.
    * @param {Object} response - The HTTP response object to send the response back to the client.
    * @throws {Error} If an error occurs during the process, it logs the error and sends a 500 status code.
@@ -515,7 +513,9 @@ class BookableController {
       const bookableId = request.params.id;
 
       if (!bookableId) {
-        logger.warn(`${tenant} -- Could not get bookable occupancy. No id provided.`);
+        logger.warn(
+          `${tenant} -- Could not get bookable occupancy. No id provided.`,
+        );
         return response.status(400).send("No bookable ID provided");
       }
 
@@ -523,32 +523,35 @@ class BookableController {
       const bookable = await BookableManager.getBookable(bookableId, tenant);
       if (!bookable) {
         logger.warn(`${tenant} -- Bookable with id ${bookableId} not found.`);
-        return response.status(404).send(`Bookable with id ${bookableId} not found`);
+        return response
+          .status(404)
+          .send(`Bookable with id ${bookableId} not found`);
       }
 
       // Calculate bookings
       let bookings;
 
       // For non-time-related bookables, get all related bookings
-      bookings = await BookingManager.getRelatedBookings(
-        tenant,
-        bookableId
-      );
+      bookings = await BookingManager.getRelatedBookings(tenant, bookableId);
 
       // Calculate how many units are already booked
       const amountBooked = bookings
-        .map(booking => booking.bookableItems)
+        .map((booking) => booking.bookableItems)
         .flat()
-        .filter(item => item.bookableId === bookableId)
+        .filter((item) => item.bookableId === bookableId)
         .reduce((sum, item) => sum + item.amount, 0);
 
       // Calculate remaining availability
       const totalCapacity = bookable.amount || null;
-      const remaining = totalCapacity !== null ? Math.max(0, totalCapacity - amountBooked) : null;
-      const isAvailable = totalCapacity === null || amountBooked < totalCapacity;
+      const remaining =
+        totalCapacity !== null
+          ? Math.max(0, totalCapacity - amountBooked)
+          : null;
+      const isAvailable =
+        totalCapacity === null || amountBooked < totalCapacity;
 
       logger.info(
-        `${tenant} -- Returning occupancy for bookable ${bookableId}`
+        `${tenant} -- Returning occupancy for bookable ${bookableId}`,
       );
 
       response.status(200).send({

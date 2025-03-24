@@ -132,7 +132,9 @@ class UserManager {
 
   static async getUserPermissions(userId, tenantId = null) {
     const tenantPermissions = [];
-    const tenants = tenantId ? [await TenantManager.getTenant(tenantId)] : await TenantManager.getTenants();
+    const tenants = tenantId
+      ? [await TenantManager.getTenant(tenantId)]
+      : await TenantManager.getTenants();
     const instance = await InstanceManager.getInstance(false);
 
     for (const tenant of tenants) {

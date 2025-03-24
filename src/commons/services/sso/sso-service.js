@@ -22,16 +22,11 @@ class SsoService {
       const roles = await SsoService.mapRoles(tenantId, user, kcRoles, app);
 
       if (
-        tenant.users.some(
-          (userReference) => userReference.userId === user.id,
-        )
+        tenant.users.some((userReference) => userReference.userId === user.id)
       ) {
         tenant.users
           .filter((userReference) => userReference.userId === user.id)
-          .forEach(
-            (user) =>
-              (user.roles = [...new Set([...roles])]),
-          );
+          .forEach((user) => (user.roles = [...new Set([...roles])]));
       } else {
         tenant.users.push({
           userId: user.id,
