@@ -329,8 +329,13 @@ class UserController {
         actor?.id &&
         process.env.BOOKING_TOOL_ADMIN_ID &&
         actor.id.toLowerCase() === process.env.BOOKING_TOOL_ADMIN_ID.toLowerCase();
+      const adminKeyHeader = request.get("x-booking-admin-key");
+      const hasAdminKey =
+        process.env.BOOKING_TOOL_ADMIN_API_KEY &&
+        adminKeyHeader &&
+        adminKeyHeader === process.env.BOOKING_TOOL_ADMIN_API_KEY;
 
-      if (!isInstanceOwner && !isAdminUser) {
+      if (!isInstanceOwner && !isAdminUser && !hasAdminKey) {
         logger.warn(`User ${actor?.id} not allowed to change user ids`);
         response.sendStatus(403);
         return;

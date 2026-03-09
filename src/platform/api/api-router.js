@@ -5,6 +5,7 @@ const InstanceController = require("./controllers/instance-controller");
 const UserController = require("./controllers/user-controller");
 const RoleController = require("./controllers/role-controller");
 const HolidayController = require("./controllers/holiday-controller");
+const adminKeyRateLimit = require("./middleware/admin-key-rate-limit");
 
 const router = express.Router({ mergeParams: true });
 
@@ -124,6 +125,7 @@ router.put(
 );
 router.post(
   "/users/:id/change-id",
+  adminKeyRateLimit,
   AuthenticationController.isSignedIn,
   UserController.changeUserId,
 );
