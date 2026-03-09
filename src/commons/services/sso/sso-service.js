@@ -4,6 +4,7 @@ const axios = require("axios");
 const UserManager = require("../../data-managers/user-manager");
 const { RoleManager } = require("../../data-managers/role-manager");
 const { User } = require("../../entities/user/user");
+const UserIdentityService = require("../user-identity-service");
 
 class SsoService {
   static async handleLogin(token) {
@@ -11,10 +12,30 @@ class SsoService {
     const app = instance.applications.find((app) => app.id === "keycloak");
     let kcResponse = await SsoService.verifyToken(token, app);
 
+    const keycloakId = kcResponse.sub;
     let user = await UserManager.getUser(kcResponse.email);
+
+    if (!user && keycloakId) {
+      const userByKeycloak = await UserManager.getUserByKeycloakId(
+        keycloakId,
+        true,
+      );
+      if (userByKeycloak) {
+        await UserIdentityService.changeUserId(
+          userByKeycloak.id,
+          kcResponse.email,
+          keycloakId,
+        );
+        user = await UserManager.getUser(kcResponse.email);
+      }
+    }
 
     if (!user) {
       throw { message: "User not found", status: 404 };
+    }
+
+    if (keycloakId) {
+      await UserManager.setKeycloakId(user.id, keycloakId);
     }
 
     const kcRoles = extractRoles(kcResponse.resource_access);
@@ -52,6 +73,9 @@ class SsoService {
 
     newUser.authType = "keycloak";
     newUser.isVerified = true;
+    if (kcResponse.sub) {
+      newUser.keycloakId = kcResponse.sub;
+    }
 
     if (app.roleMapping.active) {
       await SsoService.mapRoles(newUser, kcRoles, app);

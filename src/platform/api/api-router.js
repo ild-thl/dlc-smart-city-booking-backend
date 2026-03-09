@@ -122,6 +122,11 @@ router.put(
   AuthenticationController.isSignedIn,
   UserController.updateMe,
 );
+router.post(
+  "/users/:id/change-id",
+  AuthenticationController.isSignedIn,
+  UserController.changeUserId,
+);
 router.delete(
   "/users/:id",
   AuthenticationController.isSignedIn,

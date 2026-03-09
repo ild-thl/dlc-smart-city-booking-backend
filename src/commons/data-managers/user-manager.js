@@ -18,6 +18,33 @@ class UserManager {
     return user;
   }
 
+  static async getUserByKeycloakId(keycloakId, withSensitive = false) {
+    if (!keycloakId) {
+      return null;
+    }
+    const rawUser = await UserModel.findOne({ keycloakId: keycloakId });
+    if (!rawUser) {
+      return null;
+    }
+
+    let user = rawUser.toEntity();
+    if (!withSensitive) {
+      user = user.exportPublic();
+    }
+    return user;
+  }
+
+  static async setKeycloakId(userId, keycloakId) {
+    if (!userId || !keycloakId) {
+      return false;
+    }
+    await UserModel.updateOne(
+      { id: userId },
+      { $set: { keycloakId: keycloakId } },
+    );
+    return true;
+  }
+
   static async signupUser(user) {
     try {
       const userEntity = user instanceof User ? user : new User(user);

@@ -4,6 +4,7 @@ const bunyan = require("bunyan");
 const PermissionService = require("../../../commons/services/permission-service");
 const TenantManager = require("../../../commons/data-managers/tenant-manager");
 const { RolePermission } = require("../../../commons/entities/role/role");
+const UserIdentityService = require("../../../commons/services/user-identity-service");
 
 const logger = bunyan.createLogger({
   name: "user-controller.js",
@@ -307,6 +308,78 @@ class UserController {
     } catch (error) {
       logger.error(error);
       response.status(500).send("could not update user");
+    }
+  }
+
+  /**
+   * Changes a user's ID (typically the email address) and updates references.
+   * Restricted to instance owners.
+   *
+   * @param {Object} request - The request object.
+   * @param {Object} response - The response object.
+   * @returns {Promise<void>} - A promise that resolves when the update is complete.
+   */
+  static async changeUserId(request, response) {
+    try {
+      const actor = request.user;
+      const isInstanceOwner = await PermissionService._isInstanceOwner(
+        actor?.id,
+      );
+      const isAdminUser =
+        actor?.id &&
+        process.env.BOOKING_TOOL_ADMIN_ID &&
+        actor.id.toLowerCase() === process.env.BOOKING_TOOL_ADMIN_ID.toLowerCase();
+
+      if (!isInstanceOwner && !isAdminUser) {
+        logger.warn(`User ${actor?.id} not allowed to change user ids`);
+        response.sendStatus(403);
+        return;
+      }
+
+      const oldId =
+        typeof request.params.id === "string"
+          ? request.params.id.trim().toLowerCase()
+          : "";
+      const newId =
+        typeof request.body?.newId === "string"
+          ? request.body.newId.trim().toLowerCase()
+          : "";
+      const keycloakId =
+        typeof request.body?.keycloakId === "string"
+          ? request.body.keycloakId.trim()
+          : "";
+
+      if (!oldId || !newId) {
+        response.status(400).send("Missing old or new id");
+        return;
+      }
+
+      const result = await UserIdentityService.changeUserId(
+        oldId,
+        newId,
+        keycloakId,
+      );
+
+      if (!result.updated && result.reason === "target_exists") {
+        response.status(409).send("Target id already exists");
+        return;
+      }
+      if (!result.updated && result.reason === "not_found") {
+        response.status(404).send("User not found");
+        return;
+      }
+      if (!result.updated && result.reason === "missing_id") {
+        response.status(400).send("Missing old or new id");
+        return;
+      }
+
+      logger.info(`changed user id ${oldId} -> ${newId} by ${actor?.id}`);
+      response
+        .status(200)
+        .send({ oldId, newId, updated: result.changed });
+    } catch (error) {
+      logger.error(error);
+      response.status(500).send("could not change user id");
     }
   }
 

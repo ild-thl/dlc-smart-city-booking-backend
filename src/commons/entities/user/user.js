@@ -15,6 +15,8 @@ class User {
         // Convert id to lowercase
         if (key === 'id' && typeof params[key] === 'string') {
           this[key] = params[key].toLowerCase();
+        } else if (key === 'keycloakId' && typeof params[key] === 'string') {
+          this[key] = params[key].trim();
         } else {
           this[key] = params[key];
         }
