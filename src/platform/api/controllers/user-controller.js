@@ -354,8 +354,8 @@ class UserController {
           ? request.body.keycloakId.trim()
           : "";
 
-      if (!oldId || !newId) {
-        response.status(400).send("Missing old or new id");
+      if (!newId || (!oldId && !keycloakId)) {
+        response.status(400).send("Missing new id or identifier");
         return;
       }
 
