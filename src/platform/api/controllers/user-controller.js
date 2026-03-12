@@ -5,6 +5,7 @@ const PermissionService = require("../../../commons/services/permission-service"
 const TenantManager = require("../../../commons/data-managers/tenant-manager");
 const { RolePermission } = require("../../../commons/entities/role/role");
 const UserIdentityService = require("../../../commons/services/user-identity-service");
+const UserModel = require("../../../commons/data-managers/models/userModel");
 
 const logger = bunyan.createLogger({
   name: "user-controller.js",
@@ -378,6 +379,14 @@ class UserController {
         return;
       }
 
+      if (request.body?.anonymize === true) {
+        await UserManager.storeUser({
+          id: newId,
+          firstName: "Anonym",
+          lastName: "",
+        });
+      }
+
       logger.info(`changed user id ${oldId} -> ${newId} by ${actor?.id}`);
       response
         .status(200)
@@ -385,6 +394,85 @@ class UserController {
     } catch (error) {
       logger.error(error);
       response.status(500).send("could not change user id");
+    }
+  }
+
+  /**
+   * Update a user's first and last name (admin only).
+   *
+   * @param {Object} request - The request object.
+   * @param {Object} response - The response object.
+   * @returns {Promise<void>} - A promise that resolves when the update is complete.
+   */
+  static async updateUserNames(request, response) {
+    try {
+      const actor = request.user;
+      const isInstanceOwner = await PermissionService._isInstanceOwner(
+        actor?.id,
+      );
+      const isAdminUser =
+        actor?.id &&
+        process.env.BOOKING_TOOL_ADMIN_ID &&
+        actor.id.toLowerCase() === process.env.BOOKING_TOOL_ADMIN_ID.toLowerCase();
+      const adminKeyHeader = request.get("x-booking-admin-key");
+      const hasAdminKey =
+        process.env.BOOKING_TOOL_ADMIN_API_KEY &&
+        adminKeyHeader &&
+        adminKeyHeader === process.env.BOOKING_TOOL_ADMIN_API_KEY;
+
+      if (!isInstanceOwner && !isAdminUser && !hasAdminKey) {
+        logger.warn(`User ${actor?.id} not allowed to update user names`);
+        response.sendStatus(403);
+        return;
+      }
+
+      const userId =
+        typeof request.params.id === "string"
+          ? request.params.id.trim().toLowerCase()
+          : "";
+      const keycloakId =
+        typeof request.body?.keycloakId === "string"
+          ? request.body.keycloakId.trim()
+          : "";
+      const firstName =
+        typeof request.body?.firstName === "string"
+          ? request.body.firstName.trim()
+          : "";
+      const lastName =
+        typeof request.body?.lastName === "string"
+          ? request.body.lastName.trim()
+          : "";
+
+      if ((!userId && !keycloakId) || !firstName || !lastName) {
+        response.status(400).send("Missing user identifier or names");
+        return;
+      }
+
+      let resolvedId = userId;
+      if (!resolvedId && keycloakId) {
+        const byKeycloak = await UserManager.getUserByKeycloakId(
+          keycloakId,
+          true,
+        );
+        if (byKeycloak?.id) {
+          resolvedId = byKeycloak.id.toLowerCase();
+        }
+      }
+
+      if (!resolvedId) {
+        response.status(404).send("User not found");
+        return;
+      }
+
+      await UserModel.updateOne(
+        { id: resolvedId },
+        { $set: { firstName: firstName, lastName: lastName } },
+      );
+
+      response.status(200).send({ id: resolvedId, updated: true });
+    } catch (error) {
+      logger.error(error);
+      response.status(500).send("could not update user names");
     }
   }
 

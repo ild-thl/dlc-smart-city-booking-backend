@@ -129,6 +129,12 @@ router.post(
   AuthenticationController.isSignedIn,
   UserController.changeUserId,
 );
+router.post(
+  "/users/:id/update-names",
+  adminKeyRateLimit,
+  AuthenticationController.isSignedIn,
+  UserController.updateUserNames,
+);
 router.delete(
   "/users/:id",
   AuthenticationController.isSignedIn,
