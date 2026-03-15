@@ -380,11 +380,10 @@ class UserController {
       }
 
       if (request.body?.anonymize === true) {
-        await UserManager.storeUser({
-          id: newId,
-          firstName: "Anonym",
-          lastName: "",
-        });
+        await UserModel.updateOne(
+          { id: newId },
+          { $set: { firstName: "Anonym", lastName: "" } },
+        );
       }
 
       logger.info(`changed user id ${oldId} -> ${newId} by ${actor?.id}`);
