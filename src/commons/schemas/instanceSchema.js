@@ -41,7 +41,7 @@ const instanceSchemaDefinition = {
       message: { type: String },
       tenants: { type: Array, default: [] },
       path: { type: Array, default: [] },
-    }
+    },
   },
 };
 

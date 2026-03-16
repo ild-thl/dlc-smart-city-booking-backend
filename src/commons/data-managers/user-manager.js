@@ -6,7 +6,9 @@ const UserModel = require("./models/userModel");
 
 class UserManager {
   static async getUser(id, withSensitive = false) {
-    const rawUser = await UserModel.findOne({ id: { $regex: id, $options: 'i' } });
+    const rawUser = await UserModel.findOne({
+      id: { $regex: id, $options: "i" },
+    });
     if (!rawUser) {
       return null;
     }
@@ -183,7 +185,7 @@ class UserManager {
         userTenantPermissions.isOwner ||
         userTenantPermissions[permissionName][accessLevel] === true
       );
-    } catch (err) {
+    } catch {
       return false;
     }
   }

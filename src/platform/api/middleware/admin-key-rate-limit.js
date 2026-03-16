@@ -14,8 +14,10 @@ function cleanupOldEntries(limitMs) {
 }
 
 function adminKeyRateLimit(req, res, next) {
-  const windowMs = parseInt(process.env.BOOKING_TOOL_ADMIN_RATE_WINDOW_MS, 10) || 60_000;
-  const maxRequests = parseInt(process.env.BOOKING_TOOL_ADMIN_RATE_MAX, 10) || 10;
+  const windowMs =
+    parseInt(process.env.BOOKING_TOOL_ADMIN_RATE_WINDOW_MS, 10) || 60_000;
+  const maxRequests =
+    parseInt(process.env.BOOKING_TOOL_ADMIN_RATE_MAX, 10) || 10;
   const key = getKey(req);
   const now = Date.now();
 

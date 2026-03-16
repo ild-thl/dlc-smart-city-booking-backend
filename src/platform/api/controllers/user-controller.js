@@ -329,7 +329,8 @@ class UserController {
       const isAdminUser =
         actor?.id &&
         process.env.BOOKING_TOOL_ADMIN_ID &&
-        actor.id.toLowerCase() === process.env.BOOKING_TOOL_ADMIN_ID.toLowerCase();
+        actor.id.toLowerCase() ===
+          process.env.BOOKING_TOOL_ADMIN_ID.toLowerCase();
       const adminKeyHeader = request.get("x-booking-admin-key");
       const hasAdminKey =
         process.env.BOOKING_TOOL_ADMIN_API_KEY &&
@@ -387,9 +388,7 @@ class UserController {
       }
 
       logger.info(`changed user id ${oldId} -> ${newId} by ${actor?.id}`);
-      response
-        .status(200)
-        .send({ oldId, newId, updated: result.changed });
+      response.status(200).send({ oldId, newId, updated: result.changed });
     } catch (error) {
       logger.error(error);
       response.status(500).send("could not change user id");
@@ -412,7 +411,8 @@ class UserController {
       const isAdminUser =
         actor?.id &&
         process.env.BOOKING_TOOL_ADMIN_ID &&
-        actor.id.toLowerCase() === process.env.BOOKING_TOOL_ADMIN_ID.toLowerCase();
+        actor.id.toLowerCase() ===
+          process.env.BOOKING_TOOL_ADMIN_ID.toLowerCase();
       const adminKeyHeader = request.get("x-booking-admin-key");
       const hasAdminKey =
         process.env.BOOKING_TOOL_ADMIN_API_KEY &&
