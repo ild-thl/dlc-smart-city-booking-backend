@@ -226,7 +226,14 @@ class BookableController {
    */
   static async storeBookable(request, response) {
     const bookable = new Bookable(request.body);
-    const isUpdate = !!bookable.id;
+    let isUpdate = false;
+    if (bookable.id && bookable.tenantId) {
+      const existingBookable = await BookableManager.getBookable(
+        bookable.id,
+        bookable.tenantId,
+      );
+      isUpdate = !!existingBookable;
+    }
 
     if (isUpdate) {
       await BookableController.updateBookable(request, response);
@@ -255,7 +262,9 @@ class BookableController {
       const user = request.user;
 
       const bookable = new Bookable(request.body);
-      bookable.id = uuidv4();
+      if (!bookable.id) {
+        bookable.id = uuidv4();
+      }
       bookable.ownerUserId = user.id;
 
       if (
